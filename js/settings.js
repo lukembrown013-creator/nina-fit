@@ -1,7 +1,8 @@
 // Settings: profile, units, targets, training defaults, dashboard cards, backup.
 import { state, save, exportData, importData, wipe } from './store.js';
 import { $, esc, fmt, num, ymd } from './util.js';
-import { actions, inputs, nav, confirmSheet, toast, icon } from './ui.js';
+import { actions, inputs, submits, nav, openSheet, closeSheet, confirmSheet, toast, icon } from './ui.js';
+import { account, isSignedIn, signup, login, signOut, keepThisPhone, useCloudCopy } from './sync.js';
 
 const CARDS = [['nutrition', 'Nutrition'], ['weight', 'Weight trend'], ['week', 'This week'], ['workout', "Today's workout"], ['calendar', 'Consistency calendar']];
 
@@ -14,6 +15,8 @@ export function renderSettings() {
 
 <section class="card"><span class="label">Profile</span>
 <label class="field"><span>Name</span><input type="text" data-input="set-text" data-k="name" value="${esc(s.name)}" autocomplete="off"></label></section>
+
+${accountHtml()}
 
 <section class="card"><span class="label">Units</span>
 <div class="field"><span>Weight</span><div class="seg"><button class="${u === 'lb' ? 'on' : ''}" data-action="set-unit" data-k="units" data-v="lb">Pounds (lb)</button><button class="${u === 'kg' ? 'on' : ''}" data-action="set-unit" data-k="units" data-v="kg">Kilograms (kg)</button></div></div>
@@ -42,8 +45,79 @@ ${numField('Calories', 'targets.kcal', t.kcal)}
 
 <section class="card"><span class="label">About</span>
 <button class="btn ghost block" data-action="intro-replay">Replay the welcome tour</button>
-<span class="muted small">Nina Fit · version 1.0 (Phase 1)</span></section>`;
+<span class="muted small">Nina Fit · version 1.0 (Phase 2)</span></section>`;
 }
+
+// ---------- account & cloud sync ----------
+function lastSyncedLabel() {
+  if (!account.baseUpdatedAt) return 'Not synced yet';
+  return 'Last synced ' + new Date(account.baseUpdatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function accountHtml() {
+  if (isSignedIn()) {
+    return `<section class="card" id="account-card"><span class="label">Account & sync</span>
+<span class="sub">${esc(account.name)}</span>
+<span class="muted small">${account.syncing ? 'Syncing…' : lastSyncedLabel()}</span>
+<span class="muted">Workouts, food, weight and goals back up here. Progress photos always stay on this phone only.</span>
+<button class="btn ghost block" data-action="sync-now">Sync now</button>
+<button class="btn danger block" data-action="sign-out">Sign out</button></section>`;
+  }
+  return `<section class="card" id="account-card"><span class="label">Account & sync</span>
+<span class="muted" style="line-height:1.5">Sign in to back up and sync across devices. Progress photos always stay on this phone only, signed in or not.</span>
+<button class="btn primary block" data-action="account-signup">Create account</button>
+<button class="btn ghost block" data-action="account-login">I already have an account</button></section>`;
+}
+function refreshAccountCard() { const el = document.getElementById('account-card'); if (el) el.outerHTML = accountHtml(); }
+
+const accountForm = (title, submit, cta) => `<div style="--accent:var(--cyan)" class="col"><div class="sheet-head"><h2 class="sheet-title">${title}</h2><button class="link" data-action="sheet-close">Cancel</button></div>
+<form data-submit="${submit}" class="col" style="gap:12px">
+<label class="field"><span>Name</span><input type="text" name="name" placeholder="e.g. Nina" autocomplete="off" autocapitalize="words"></label>
+<label class="field"><span>Passcode</span><input type="password" name="passcode" inputmode="text" placeholder="At least 4 characters" autocomplete="off"></label>
+<button class="btn primary block" type="submit">${cta}</button></form></div>`;
+
+actions['account-signup'] = () => openSheet(accountForm('Create account', 'account-signup-go', 'Create account'));
+actions['account-login'] = () => openSheet(accountForm('Log in', 'account-login-go', 'Log in'));
+
+let pendingCloudData = null;
+submits['account-signup-go'] = async (v, form) => {
+  const name = (v.name || '').trim(), passcode = v.passcode || '';
+  if (!name) return toast('Enter a name');
+  if (passcode.length < 4) return toast('Passcode must be at least 4 characters');
+  const btn = form.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Creating…';
+  try { await signup(name, passcode); closeSheet(); nav.render(); toast('Account created — your data is backed up'); }
+  catch (e) { btn.disabled = false; btn.textContent = 'Create account'; toast(e.message); }
+};
+submits['account-login-go'] = async (v, form) => {
+  const name = (v.name || '').trim(), passcode = v.passcode || '';
+  if (!name || !passcode) return toast('Enter your name and passcode');
+  const btn = form.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Logging in…';
+  try {
+    const r = await login(name, passcode);
+    if (r.choice) {
+      closeSheet();
+      openSheet(`<div style="--accent:var(--cyan)" class="col"><h2 class="sheet-title">Which data should win?</h2>
+<p class="muted" style="font-size:15px;line-height:1.5">This phone already has data on it, and so does ${esc(name)}'s account. Keeping this phone's data overwrites the cloud copy; using the cloud copy replaces what's on this phone.</p>
+<button class="btn primary block" data-action="account-keep-phone">Keep this phone's data</button>
+<button class="btn ghost block" data-action="account-use-cloud" data-updated-at="${r.cloudUpdatedAt}">Use the cloud copy</button></div>`);
+      pendingCloudData = r.cloudData;
+      return;
+    }
+    closeSheet(); nav.render(); toast('Logged in');
+  } catch (e) { btn.disabled = false; btn.textContent = 'Log in'; toast(e.message); }
+};
+actions['account-keep-phone'] = async () => { closeSheet(); try { await keepThisPhone(); toast('Kept this phone’s data'); } catch (e) { toast(e.message); } nav.render(); };
+actions['account-use-cloud'] = el => {
+  useCloudCopy(pendingCloudData, Number(el.dataset.updatedAt)); pendingCloudData = null;
+  closeSheet(); nav.go('home'); toast('Restored from the cloud');
+};
+actions['sync-now'] = async () => {
+  refreshAccountCard();
+  try { await keepThisPhone(); toast('Synced'); } catch (e) { toast(e.message); }
+  refreshAccountCard();
+};
+actions['sign-out'] = () => confirmSheet({ title: 'Sign out?', text: 'Your data stays on this phone. Sign back in any time to pick up syncing again.', ok: 'Sign out' }, () => {
+  signOut(); nav.render(); toast('Signed out');
+});
 
 function setPath(key, val) {
   const parts = key.split('.'); let o = state.settings;

@@ -1,8 +1,8 @@
-// Progress tab: body weight trend, measurements, and strength records.
+// Progress tab: body weight trend, measurements, strength records, and on-device photos.
 import { state, save } from './store.js';
-import { esc, fmt, uid, num, ymd, parseYmd, addDays, niceDate, shortDate, lineChart, e1rm } from './util.js';
+import { $, esc, fmt, uid, num, ymd, parseYmd, addDays, niceDate, shortDate, lineChart, e1rm } from './util.js';
 import { weightSeries, weeklyTrendChange, siteSeries, historyFor, bestFor, trainedExercises, toDisp, toKg, wu, lenDisp, lenCm, lu, SITES } from './calc.js';
-import { actions, submits, nav, openSheet, closeSheet, toast, buzz, icon } from './ui.js';
+import { actions, submits, nav, openSheet, closeSheet, closeAllSheets, confirmSheet, toast, buzz, icon } from './ui.js';
 
 export const progNav = { tab: 'body', range: 90, allWeights: false };
 const day = s => parseYmd(s).getTime() / 864e5;
@@ -69,8 +69,9 @@ function strengthHtml() {
 export function renderProgress() {
   return `<header class="head"><h1>Progress</h1></header>
 <div class="seg"><button class="${progNav.tab === 'body' ? 'on' : ''}" data-action="prog-tab" data-t="body">Body</button>
-<button class="${progNav.tab === 'strength' ? 'on' : ''}" data-action="prog-tab" data-t="strength">Strength</button></div>
-${progNav.tab === 'body' ? bodyHtml() : strengthHtml()}`;
+<button class="${progNav.tab === 'strength' ? 'on' : ''}" data-action="prog-tab" data-t="strength">Strength</button>
+<button class="${progNav.tab === 'photos' ? 'on' : ''}" data-action="prog-tab" data-t="photos">Photos</button></div>
+${progNav.tab === 'body' ? bodyHtml() : progNav.tab === 'strength' ? strengthHtml() : photosHtml()}`;
 }
 
 actions['prog-tab'] = el => { progNav.tab = el.dataset.t; nav.render(true); };
@@ -149,4 +150,85 @@ ${b ? `<div class="grid2"><div class="col"><span class="muted small">Best set</s
 ${chart}
 <div class="list">${[...h].reverse().slice(0, 8).map(s => `<div class="item"><span class="sub">${niceDate(s.date)}</span>
 <span class="muted small" style="text-align:right">${s.sets.map(x => `${x.kg ? fmt(toDisp(x.kg), 2) + '×' : ''}${x.reps}`).join(', ')}</span></div>`).join('')}</div></div>`);
+};
+
+// ---------- photos (device-only — see store.js, never exported or synced) ----------
+const photoUrls = new Map(); // id -> object URL, created lazily, revoked on delete
+function urlFor(p) {
+  let u = photoUrls.get(p.id);
+  if (!u) { u = URL.createObjectURL(p.blob); photoUrls.set(p.id, u); }
+  return u;
+}
+
+function photosHtml() {
+  const photos = [...state.photos].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  return `<section class="card" style="gap:14px"><span class="label">Photos</span>
+<span class="muted small">Stay on this phone only — never backed up or synced.</span>
+<div class="photo-grid">
+<button class="photo-add" data-action="photo-add" aria-label="Add photo">${icon.plus}</button>
+${photos.map(p => `<button class="photo-thumb" data-action="photo-open" data-id="${p.id}"><img src="${urlFor(p)}" alt="Progress photo from ${p.date}"></button>`).join('')}
+</div>
+${photos.length ? '<span class="muted small">Tap a photo to view, delete or compare it with another.</span>' : '<span class="muted small">Add your first progress photo above.</span>'}</section>`;
+}
+
+function resizeImage(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { URL.revokeObjectURL(url); reject(new Error('Could not process that photo')); return; }
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(b => { URL.revokeObjectURL(url); b ? resolve(b) : reject(new Error('Could not process that photo')); }, 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that photo')); };
+    img.src = url;
+  });
+}
+async function addPhoto(file) {
+  if (!file.type || !file.type.startsWith('image/')) throw new Error('That file is not a photo');
+  const blob = await resizeImage(file, 1600, 0.85);
+  state.photos.push({ id: uid(), date: ymd(), blob });
+  save('photos');
+}
+actions['photo-add'] = () => {
+  const inp = $('#photo-file'); inp.value = '';
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    try { await addPhoto(f); nav.render(true); toast('Photo added'); }
+    catch (e) { toast(e.message || 'Could not add that photo'); }
+  };
+  inp.click();
+};
+function photoFullHtml(p) {
+  return `<div style="--accent:var(--cyan)" class="col"><div class="sheet-head"><h2 class="sheet-title">${niceDate(p.date)}</h2><button class="link" data-action="sheet-close">Close</button></div>
+<img class="photo-full" src="${urlFor(p)}" alt="Progress photo from ${p.date}">
+<button class="btn ghost block" data-action="photo-compare-pick" data-id="${p.id}">Compare with another photo</button>
+<button class="btn danger block" data-action="photo-del" data-id="${p.id}">Delete photo</button></div>`;
+}
+actions['photo-open'] = el => { const p = state.photos.find(x => x.id === el.dataset.id); if (p) openSheet(photoFullHtml(p)); };
+actions['photo-del'] = el => {
+  const id = el.dataset.id;
+  confirmSheet({ title: 'Delete this photo?', text: 'This cannot be undone.', ok: 'Delete', danger: true }, () => {
+    const u = photoUrls.get(id); if (u) { URL.revokeObjectURL(u); photoUrls.delete(id); }
+    state.photos = state.photos.filter(p => p.id !== id);
+    save('photos'); closeAllSheets(); nav.render(true); toast('Photo deleted');
+  });
+};
+actions['photo-compare-pick'] = el => {
+  const baseId = el.dataset.id;
+  const others = state.photos.filter(x => x.id !== baseId).sort((a, b) => b.date.localeCompare(a.date));
+  if (!others.length) return toast('Add another photo first');
+  openSheet(`<div style="--accent:var(--cyan)" class="col"><div class="sheet-head"><h2 class="sheet-title">Compare with…</h2><button class="link" data-action="sheet-close">Cancel</button></div>
+<div class="list">${others.map(p => `<button class="item press" data-action="photo-compare-go" data-a="${baseId}" data-b="${p.id}"><span class="sub">${niceDate(p.date)}</span></button>`).join('')}</div></div>`);
+};
+actions['photo-compare-go'] = el => {
+  const a = state.photos.find(x => x.id === el.dataset.a), b = state.photos.find(x => x.id === el.dataset.b);
+  if (!a || !b) return;
+  const [first, second] = a.date <= b.date ? [a, b] : [b, a];
+  openSheet(`<div style="--accent:var(--cyan)" class="col"><div class="sheet-head"><h2 class="sheet-title">Compare</h2><button class="link" data-action="sheet-close">Close</button></div>
+<div class="compare-pair"><div class="col"><img src="${urlFor(first)}" alt="Photo from ${first.date}"><span class="muted small" style="text-align:center">${niceDate(first.date)}</span></div>
+<div class="col"><img src="${urlFor(second)}" alt="Photo from ${second.date}"><span class="muted small" style="text-align:center">${niceDate(second.date)}</span></div></div></div>`);
 };

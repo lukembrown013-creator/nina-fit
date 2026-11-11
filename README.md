@@ -1,65 +1,84 @@
-# Nina Fit: Phase 1
+# Nina Fit: Phase 2
 
-A personal fitness tracker that installs to the iPhone Home Screen. Phase 1 covers core logging: dashboard, workouts, nutrition, body, settings and backup. It works offline and keeps all data on the phone.
+Phase 1 covered logging: dashboard, workouts, nutrition, body, settings, backup. Phase 2 adds three things on top of that, without changing anything about how Phase 1 works:
 
-There is no build step. The folder is the app: plain HTML, CSS and JavaScript.
+- **Account + cloud sync** — optional. The app still works fully offline with no account, exactly like Phase 1. Signing in (Settings → Account & sync) backs up workouts, food, weight, measurements and goals, and keeps them in sync if the app is ever used on a second device.
+- **Progress photos** — Progress tab → Photos. These never leave the phone: not backed up, not synced, not in the exported backup file. They live only in this one browser/app install, the same place Phase 1's data already lived.
+- **Barcode scanning** — Food → the barcode icon next to "Add food". Scans a packaged food's barcode and looks it up automatically.
 
-## Try it on your Mac
+There is still no build step for the app itself — it's plain HTML/CSS/JS. What's new is a small server (a Cloudflare Worker) that handles login and sync, which needs a one-time setup below.
 
-1. Unzip the folder.
-2. Open Terminal and run:
-   ```
-   cd ~/Downloads/nina-fit
-   python3 -m http.server 8000
-   ```
-   If your Mac asks to install developer tools the first time, accept, then run it again.
-3. Open http://localhost:8000 in Safari or Chrome. To see it phone-sized in Safari: Develop menu, Enter Responsive Design Mode.
-4. Press Control-C in Terminal to stop.
+## What you need to do (one-time setup)
 
-Opening `index.html` by double-clicking does not work. The app needs to be served, as above.
+You already have the site live on Cloudflare from Phase 1 (`nina-fit.lukembrown013.workers.dev` or similar), connected to a GitHub repo that auto-deploys. These steps build on that — you don't need Node, npm, or the command line for any of this; it's all in the Cloudflare dashboard and GitHub's web UI.
 
-## Put it online (free)
+### 1. Push the new files to GitHub
 
-The web address you choose here is permanent for Nina: her data is tied to it. Pick the project name once and keep it.
+Add/replace these in your `nina-fit` repository (GitHub's web UI: open the repo, "Add file" → "Upload files", drag these in, Commit — same as before):
+- `worker.js` (new — the server code)
+- `migrations/0001_init.sql` (new)
+- `wrangler.jsonc` (replace the old one)
+- `index.html`, `styles.css` (replaced)
+- Everything in `js/` (several files changed, two are new: `sync.js`, `scan.js`)
 
-Recommended: GitHub plus Cloudflare Pages, so each later phase goes live automatically.
+Don't deploy yet — finish steps 2–4 first, or the first deploy will fail looking for a database that doesn't exist.
 
-1. On github.com, create a new **private** repository named `nina-fit`. Leave it empty.
-2. Upload the contents of this folder to it (on the repository page: "uploading an existing file", then drag everything in, then Commit). Claude can also push the files for you.
-3. Create a free account at cloudflare.com.
-4. In the Cloudflare dashboard: Workers & Pages, Create application, Pages, connect to Git, and choose the `nina-fit` repository.
-5. Build settings: no framework, leave the build command empty, output directory `/`. Deploy.
-6. Cloudflare gives you an address like `https://nina-fit.pages.dev`. That is the app.
+### 2. Create the database
 
-Cloudflare's menus change from time to time. If a label differs, look for "Pages" and "Connect to Git".
+In the Cloudflare dashboard: **Storage & Databases → D1 → Create database**. Name it `nina-fit`. Once created, open it and copy the **Database ID** shown on its page.
 
-## Install on her iPhone
+Back in your GitHub repo, edit `wrangler.jsonc` (pencil icon → edit) and paste that ID in place of `REPLACE_WITH_THE_ID_FROM_WRANGLER_D1_CREATE`. Commit.
 
-1. Open the address in **Safari** (not Chrome).
-2. Tap the Share button, then "Add to Home Screen", then Add.
-3. Open it from the Home Screen icon from then on. Data logged in the Safari tab and data in the Home Screen app are kept separately, so install first, then start logging.
+### 3. Create the tables
 
-## Test checklist
+Still in that D1 database's page in the Cloudflare dashboard, find the **Console** (sometimes called "Query") tab. Paste in the contents of `migrations/0001_init.sql` and run it. This creates the two tables the app needs (`users`, `sync_state`) — a one-time step.
 
-- Welcome tour appears once, then the dashboard.
-- Settings: set calorie and macro targets; the dashboard ring fills as food is logged.
-- "+" button: log food, log weight, log measurements, start a workout.
-- Train: create a workout, start it, tick sets (rest timer starts), finish. Start it again: last weights and reps are filled in. Beat a previous best to see the PR celebration.
-- Food: add with Quick add, re-add from Recent, save a meal, swipe a row left to delete, swipe the screen to change day.
-- Progress: weight trend chart, measurements, strength records.
-- Turn on Airplane Mode and reopen the app: it still loads and logs.
-- Settings: Export backup, then Restore from backup.
+### 4. Add the session secret
 
-## Updating the app later
+Go to **Workers & Pages → nina-fit → Settings → Variables and Secrets → Add → Secret**. Name it `SESSION_SECRET`, and for the value, paste any long random string — for example, generate one at [1password.com/password-generator](https://1password.com/password-generator/) (64 characters, all character types) and use that. This is what signs people's login sessions; it never needs to be remembered, just set once.
 
-Replace the files in the GitHub repository. Cloudflare redeploys by itself. On the phone, the new version appears the second time the app is opened after an update. Her data is not touched by updates.
+### 5. Deploy
+
+Now trigger a deploy — either push any small change to GitHub, or in Cloudflare go to the Worker's **Deployments** tab and redeploy the latest commit. Cloudflare will build with the new `wrangler.jsonc`, which wires up the database automatically.
+
+Open the live site afterward and check Settings → Account & sync shows the "Create account" / "I already have an account" buttons. If instead you see a blank or broken page, the most common cause is the database ID in `wrangler.jsonc` not matching step 2 exactly — double-check it.
+
+## Try it locally on your Mac first (optional, recommended)
+
+Same as Phase 1 — serve the folder and open it in a browser:
+```
+cd ~/Downloads/nina-fit
+python3 -m http.server 8000
+```
+Open http://localhost:8000. Note: signing in and syncing only work once this is actually deployed to Cloudflare (there's no database running locally this way) — but everything else, including the barcode scanner's camera (over `http://localhost`, which browsers treat as a safe origin) and progress photos, can be tried locally first.
+
+## Test checklist (Phase 2 additions — Phase 1's checklist still applies too)
+
+- **Account & sync**: Settings → Create account with a name and passcode. Log some food/weight. Settings → Sync now, then confirm it shows "Last synced" with a recent time.
+- **Second device / fresh browser profile**: open the site somewhere that has never logged in (e.g. a private/incognito window), log in with the same name and passcode, choose "Use the cloud copy", and confirm the data matches.
+- **Sign out and back in**: data already on the phone stays put; after signing back in it offers the "keep this phone's data" vs "use the cloud copy" choice if both have data.
+- **Offline**: Airplane Mode, log something, turn Wi-Fi back on, reopen the app — it syncs automatically within a few seconds (Settings will show an updated "Last synced" time).
+- **Progress photos**: Progress → Photos → add one from the camera and one from the photo library. Open one, delete it. Add two and use "Compare with another photo." Export a backup (Settings) and confirm the backup file does **not** contain photos (it's just JSON — open it in a text editor to check if you want).
+- **Barcode scanning**: Food → "+" next to a meal → tap the barcode icon → scan a real packaged food. Confirm it finds the product and prefills calories/macros. Try a barcode that won't be in the database (or tap "Type the barcode instead") to confirm the manual fallback works.
+- **Camera permission denied**: deny camera access when prompted, confirm the app recovers gracefully (an error toast, not a stuck screen) and still lets you add food manually.
+
+## Limitations worth knowing about
+
+- **Barcode scanning needs network** on first use each session (it loads a small scanning library, then looks up the product) — it won't work mid-flight in Airplane Mode. Manual entry still does, once back online.
+- **Sync is last-write-wins**, not a smart merge. If the same account is used on two devices at close to the same moment, whichever syncs second will ask to keep this phone's data or take the cloud copy — it won't try to combine them. For one person using mostly one phone, this won't come up in practice.
+- **The GitHub repo is still Public** as of the end of Phase 1 — worth switching to Private in the repo's Settings, since `wrangler.jsonc` doesn't contain secrets but there's no reason to leave it open.
 
 ## What is where
 
 - `index.html`, `styles.css`: page shell and the design system
 - `js/app.js`: startup, navigation, quick add, welcome tour
 - `js/home.js`, `train.js`, `workout.js`, `food.js`, `progress.js`, `settings.js`: one file per screen
+- `js/sync.js`: account + cloud sync (new)
+- `js/scan.js`: barcode camera scanning (new)
 - `js/store.js`: saving and loading data on the phone; backup format
 - `js/calc.js`: trends, records, totals, unit conversion
 - `js/exercises.js`: the built-in exercise list
 - `sw.js`, `manifest.webmanifest`, `icons/`: offline support and Home Screen install
+- `worker.js`: the server — login, sync, and the food-barcode lookup proxy (new)
+- `migrations/0001_init.sql`: database schema (new)
+- `wrangler.jsonc`: deploy configuration — holds the database ID, not any secret

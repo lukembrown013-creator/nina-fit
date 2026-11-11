@@ -8,6 +8,7 @@ import { renderFood, openAddFood, shiftFoodDay, foodNav } from './food.js';
 import { renderProgress } from './progress.js';
 import { renderSettings } from './settings.js';
 import { renderWorkout, initWorkout } from './workout.js';
+import { pullIfNewer } from './sync.js';
 
 const views = { home: renderHome, train: renderTrain, food: renderFood, progress: renderProgress, settings: renderSettings };
 
@@ -118,11 +119,14 @@ if (window.visualViewport) {
 // Refresh when the app comes back to the foreground on a new day.
 let lastDay = ymd();
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && ymd() !== lastDay) { lastDay = ymd(); foodNav.date = lastDay; nav.render(); }
+  if (document.visibilityState !== 'visible') return;
+  if (ymd() !== lastDay) { lastDay = ymd(); foodNav.date = lastDay; nav.render(); }
+  pullIfNewer().then(applied => { if (applied) nav.render(); }).catch(() => {});
 });
 
 async function boot() {
   await load();
+  await pullIfNewer().catch(() => {}); // picks up changes made elsewhere since last time; silent if offline
   initGestures({ onPageSwipe: d => { if (nav.tab === 'food') shiftFoodDay(d); } });
   nav.render(true);
   renderWorkout();

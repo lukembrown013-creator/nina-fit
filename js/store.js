@@ -17,7 +17,10 @@ export const defaultSettings = () => ({
   lastBackup: null
 });
 
-const KEYS = ['settings', 'weights', 'measurements', 'foods', 'meals', 'foodLog', 'templates', 'workouts', 'customExercises', 'activeWorkout'];
+const KEYS = ['settings', 'weights', 'measurements', 'foods', 'meals', 'foodLog', 'templates', 'workouts', 'customExercises', 'activeWorkout', 'photos'];
+// Keys that sync to the cloud (when signed in). Photos never leave this device, and an
+// in-progress workout is just scratch state — neither belongs in the synced payload.
+export const SYNC_KEYS = KEYS.filter(k => k !== 'activeWorkout' && k !== 'photos');
 
 export const state = {
   settings: defaultSettings(),
@@ -29,7 +32,8 @@ export const state = {
   templates: [],        // { id, name, days: [0-6], exercises: [{ name, sets, reps }] }
   workouts: [],         // { id, date, start, end, name, templateId, exercises: [{ name, muscle, sets: [{ kg, reps, rpe, pr }] }] }
   customExercises: [],  // { name, muscle, equip }
-  activeWorkout: null
+  activeWorkout: null,
+  photos: []            // { id, date, blob } — stored only on this device, never synced or exported
 };
 
 let db = null;
@@ -91,25 +95,33 @@ export async function load() {
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* optional */ }
 }
 
+// Called after every save() — sync.js hooks in here to push changes to the cloud
+// without store.js needing to know sync exists.
+let saveHook = null;
+export function onSave(fn) { saveHook = fn; }
+
 export function save(...keys) {
   for (const k of keys) write(k, state[k]).catch(() => {});
+  if (saveHook) { try { saveHook(keys); } catch { /* sync is best-effort */ } }
 }
 
+// Local backup file — a device-level export the user triggers themselves. Photos are left
+// out: they stay on this device only, and don't suit a JSON file anyway.
 export function exportData() {
   const data = {};
-  for (const k of KEYS) if (k !== 'activeWorkout') data[k] = state[k];
+  for (const k of KEYS) if (k !== 'activeWorkout' && k !== 'photos') data[k] = state[k];
   return { app: APP_ID, version: VERSION, exportedAt: new Date().toISOString(), data };
 }
 
 export function importData(obj) {
   if (!obj || obj.app !== APP_ID || !obj.data) throw new Error('This file is not a Nina Fit backup.');
   for (const k of KEYS) {
-    if (k === 'activeWorkout') { state.activeWorkout = null; continue; }
+    if (k === 'activeWorkout' || k === 'photos') continue; // never touched by backup/restore
     if (k === 'settings') state.settings = mergeSettings(obj.data.settings);
     else state[k] = Array.isArray(obj.data[k]) ? obj.data[k] : [];
   }
   state.settings.onboarded = true;
-  save(...KEYS);
+  save(...KEYS.filter(k => k !== 'photos'));
 }
 
 export function wipe() {

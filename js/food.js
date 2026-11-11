@@ -3,6 +3,7 @@ import { state, save } from './store.js';
 import { esc, fmt, uid, num, ymd, addDays, niceDate } from './util.js';
 import { dayTotals, recentFoods, guessMeal, MEALS } from './calc.js';
 import { actions, inputs, submits, nav, openSheet, closeSheet, toast, buzz, icon } from './ui.js';
+import { openScanner } from './scan.js';
 
 export const foodNav = { date: ymd() };
 const kc = e => (e.kcal || 0) * (e.qty ?? 1);
@@ -94,12 +95,35 @@ ${saveOption ? '<label class="check-row"><input type="checkbox" name="keep" valu
 }
 
 function addHtml() {
-  return `<div class="sheet-head"><h2 class="sheet-title">Add food</h2><button class="btn ghost sm" data-action="sheet-close">Done</button></div>
+  return `<div class="sheet-head"><h2 class="sheet-title">Add food</h2>
+<span class="row" style="gap:6px"><button class="icon-btn" data-action="food-scan" aria-label="Scan barcode">${icon.scan}</button>
+<button class="btn ghost sm" data-action="sheet-close">Done</button></span></div>
 <div class="chips scroll">${MEALS.map(m => `<button class="chip${add.meal === m ? ' on' : ''}" data-action="add-meal-pick" data-m="${m}">${m}</button>`).join('')}</div>
 <div class="seg">${TABS.map(([k, l]) => `<button class="${add.tab === k ? 'on' : ''}" data-action="add-tab" data-t="${k}">${l}</button>`).join('')}</div>
 ${add.tab === 'quick' ? '' : `<input type="search" data-input="add-q" value="${esc(add.q)}" placeholder="Search" autocomplete="off" autocorrect="off" enterkeyhint="search">`}
 <div id="add-list" class="col" style="gap:12px;min-height:40vh">${addList()}</div>`;
 }
+actions['food-scan'] = () => {
+  openScanner(async (code, err) => {
+    if (err) return toast(err);
+    if (!code) return; // cancelled
+    toast('Looking up…');
+    let body = null;
+    try {
+      const res = await fetch('/api/food/' + code);
+      body = await res.json().catch(() => null);
+    } catch { return toast("Couldn't reach the food database — check your connection"); }
+    if (body && body.found) {
+      openSheet(`<div style="--accent:var(--cyan)" class="col"><div class="sheet-head"><h2 class="sheet-title">Found it</h2><button class="link" data-action="sheet-close">Cancel</button></div>
+${foodForm({ submit: 'food-create', cta: 'Save and add', v: body })}</div>`);
+    } else {
+      toast('Not in the food database — add it by hand');
+      openSheet(`<div style="--accent:var(--cyan)" class="col"><div class="sheet-head"><h2 class="sheet-title">New food</h2><button class="link" data-action="sheet-close">Cancel</button></div>
+${foodForm({ submit: 'food-create', cta: 'Save and add' })}</div>`);
+    }
+  });
+};
+
 export function openAddFood(meal, date) {
   add = { meal: meal || guessMeal(), date: date || (nav.tab === 'food' ? foodNav.date : ymd()), tab: recentFoods(1).length ? 'recent' : 'quick', q: '' };
   openSheet(`<div style="--accent:var(--cyan)" class="col" id="add-wrap">${addHtml()}</div>`);
